@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+logs/
+.hommie.lock
+settings.json
+backup/
+# voice models are large (hundreds of MB): see voices/README.md
+voices/*
+!voices/README.md
