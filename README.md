@@ -39,6 +39,7 @@ Settings are saved to `settings.json` (created on first change, not in git).
 | obsidian | reads/searches your Obsidian vault, writes only to `Hommie/` ("note that ...") | Hommie stops knowing about Obsidian |
 | audio_aec | echo-free mic + interrupting her (barge-in) | she can't hear you while talking |
 | ui_web | web UI: orb, chat, settings panel, plugin toggles (`--ui`) | no UI; everything else unchanged |
+| guide | screen guide: highlights the next thing to click in any app (see below) | no screen guide |
 
 ## Choosing the brain (Claude, Groq, Gemini)
 Pick who answers in the web UI: Settings, **Brain**, **Who answers**. Or say or type it:
@@ -80,6 +81,22 @@ The dropdown is built from `CHOICES`, so it updates by itself. Delete `brain_rou
 
 For coding in a plain terminal (not Hommie), [opencode](https://opencode.ai) reads the same two keys; `opencode -m groq/openai/gpt-oss-120b`
 or `opencode -m google/gemini-3.5-flash`, and `/models` switches inside it.
+
+## Screen guide (learn any program, one click at a time)
+Say "guide me to add a fillet", "show me where the extrude tool is", "walk me through exporting an STL" or "highlight the save icon".
+Hommie looks at your screen, draws an amber box and a numbered label on the one control to use next, glides a ghost cursor
+to it (an overlay, so it never steals clicks) and says the step aloud. Then you just use the app:
+- It does not listen to the mouse. While a step shows, it takes a cheap screenshot about once a second; when the picture changes
+  and settles (a menu, submenu or dialog opened, a tab switched) it asks the vision model for the next step, with the goal and the
+  steps so far, so it points *inside* the submenu that just appeared, or says "That's not it" and shows the way back.
+- Changes inside one control (a checkbox) can't be seen: say "next" or "done". Also "repeat" and "stop the guide".
+- Who looks at the screen: Settings, **Screen guide**: Claude Sonnet (default, accurate, about 5-10 s per step, uses your Claude
+  quota), Claude Haiku (cheaper), or Gemini Flash (free tier is only about 20 requests a day). Groq has no vision model that points well.
+- Privacy: a screenshot is sent to the chosen model only for each step of a guide you asked for, never in the background; Hommie says
+  "looking at your screen" first. Screenshots are kept in the runtime tmpfs and deleted straight away.
+- Needs: KDE `spectacle`, the *system* `python3` with GTK3 (`tools/overlay.py`, run through XWayland because KDE Wayland blocks normal
+  always-on-top windows), Pillow in the venv (`pip install pillow`), and the `claude` CLI (or `GEMINI_API_KEY`).
+- Not done: moving the real mouse pointer (needs `ydotool` + membership of the `input` group; the ghost cursor shows the way instead).
 
 ## Add a feature
 Copy `plugins/_example.py` to `plugins/cmd_whatever.py` and edit. No other file changes.

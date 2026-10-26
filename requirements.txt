@@ -1,5 +1,6 @@
 faster-whisper==1.2.1
 kokoro-onnx==0.4.7
+numpy
+pillow
 piper-tts==1.8.0
 soundfile==0.14.0
-numpy

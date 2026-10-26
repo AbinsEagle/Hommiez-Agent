@@ -6,6 +6,7 @@ API keys: GROQ_API_KEY / GEMINI_API_KEY from the environment, else the `export` 
 Delete this file and Hommie goes back to Claude alone (brain_claude still works)."""
 import json, os, re, time, urllib.error, urllib.request
 from hommie.agent_tools import SCHEMAS, ToolBox
+from hommie.keys import api_key
 
 PRIORITY = 41                      # after brain_claude (40), which it wraps
 DEFAULTS = {"choice": "claude:haiku", "history_turns": 10}
@@ -29,20 +30,6 @@ TOOLS_NOTE = ("You have tools: read_file, list_dir, find_files, grep, write_file
               "own notes). Use them instead of guessing, and never invent file contents. If a tool is refused, say so in one "
               "short sentence. Anything not pre-approved is confirmed out loud by the app, so don't ask the user yourself. "
               "You are speaking aloud: keep replies short, no markdown.")
-
-def api_key(var):
-    if os.environ.get(var):
-        return os.environ[var]
-    try:
-        with open(os.path.expanduser("~/.bashrc")) as f:
-            found = None
-            for line in f:
-                m = re.match(rf"\s*export\s+{var}=['\"]?([^'\"\s]+)", line)
-                if m:
-                    found = m.group(1)           # the last assignment wins, as in a shell
-            return found
-    except OSError:
-        return None
 
 class Router:
     streams = True
