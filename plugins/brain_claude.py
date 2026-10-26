@@ -1,6 +1,6 @@
 """The brain: one long-lived `claude` process (your claude.ai login, no API key), run from a neutral folder
 so each turn skips startup cost. Anything blocked is confirmed out loud, then allowed for that one action.
-Owns its own commands: "use the smart model" / "use the fast model"."""
+Which model it runs (and Groq/Gemini instead) is chosen by brain_router.py."""
 import json, os, re, shutil, subprocess, threading
 from hommie.core import HERE
 
@@ -10,9 +10,7 @@ DEFAULTS = {
     "effort": "low",
     "base_allow": ["Read", "Glob", "Grep", "Edit", "Write", "Bash(ls:*)", "Bash(cat:*)"],
 }
-UI_TITLE = "Brain"
-UI = [{"key": "model", "label": "Model", "type": "select",
-       "options": [["haiku", "Fast (Haiku)"], ["sonnet", "Smarter (Sonnet)"]]}]
+# The Brain dropdown and the "use the smart model" commands live in brain_router.py, which sets cfg["model"].
 PERMISSION_NOTE = ("If a tool is blocked for permissions, say in one short sentence what you tried; the app "
                    "will ask the user to confirm out loud, so don't ask yourself.")
 
@@ -119,15 +117,6 @@ def setup(ctx):
     brain = _brain = Brain(ctx, cfg)
     ctx.provide("brain", brain, "claude", priority=100)
     ctx.on("start", lambda: threading.Thread(target=brain._turn, args=("Reply with just the word ready.",), daemon=True).start())
-
-    def model_cmd(m, text):
-        if re.search(r"\b(smart|smarter|big|think harder)\b.*\bmodel\b|\bthink harder\b", text, re.I):
-            cfg["model"] = "sonnet"; return "Okay, switching to my smarter brain. It's a little slower."
-        if re.search(r"\b(fast|faster|quick|small)\b.*\bmodel\b", text, re.I):
-            cfg["model"] = "haiku"; return "Okay, back to the fast brain."
-        return None
-
-    ctx.command(r"\bmodel\b|think harder", model_cmd, "claude_model", priority=50)
 
 def teardown(ctx):
     _brain.close()
