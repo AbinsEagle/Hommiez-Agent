@@ -12,6 +12,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ./jarvis.py --plugins   # check what loaded
 ./jarvis.py --ui        # hands-free + web window
 ```
+Natural voice (optional): `plugins/tts_pocket.py` runs Pocket TTS in its own Python (torch is big, so it is not in the main venv):
+`python3 -m venv ~/tts-trial/.venv && ~/tts-trial/.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu pocket-tts soundfile`.
+Until it has loaded (about a minute) or if it fails, Kokoro speaks. Set `tts_pocket.voice` to a .wav path to clone a voice.
+
 Only one Hommie can run at a time (a lock stops a second copy). Logs go to `logs/hommie.log`.
 `audio_aec.py` starts a private echo canceller (`aec/echo-cancel.conf`) so she can hear you while she talks; delete it to turn that off.
 Settings are saved to `settings.json` (created on first change, not in git).

@@ -41,6 +41,14 @@ def clean(text):
     text = re.sub(r"https?://\S+", "link", text)
     return re.sub(r"\s+", " ", text).strip()
 
+PRONUNCIATIONS = {}          # written word -> how to spell it for the voice, e.g. {"Abins": "Ebins"} (see plugins/pronunciations.py)
+
+def pronounce(text):
+    """Respell words the voice says wrong. Used only right before synthesis, so screens and logs keep the real spelling."""
+    for word, spoken in PRONUNCIATIONS.items():
+        text = re.sub(r"\b%s\b" % re.escape(word), spoken, text, flags=re.I)
+    return text
+
 def speakable(text):
     """Shape text so a voice phrases it like speech: shorter breaths, no symbols read out."""
     t = clean(text)

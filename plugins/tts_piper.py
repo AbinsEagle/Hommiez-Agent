@@ -1,6 +1,6 @@
 """Backup voice: Piper (local). Used only if the Kokoro plugin is missing or fails."""
 import os
-from hommie.core import HERE, play_wav, temp_wav
+from hommie.core import HERE, play_wav, pronounce, temp_wav
 
 PRIORITY = 31
 REQUIRES = ["piper"]
@@ -17,7 +17,7 @@ class Piper:
             self.v = PiperVoice.load(os.path.join(HERE, "voices", VOICE_FILE))
         wav = temp_wav()
         with wave.open(wav, "wb") as w:
-            self.v.synthesize_wav(text, w)
+            self.v.synthesize_wav(pronounce(text), w)
         play_wav(wav)
 
 def setup(ctx):

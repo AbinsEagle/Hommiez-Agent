@@ -1,11 +1,12 @@
 """Last-resort robot voice (espeak-ng). Keeps Hommie talking if every other voice fails."""
 import shutil, subprocess
+from hommie.core import pronounce
 
 PRIORITY = 32
 
 class Espeak:
     def speak(self, text):
-        subprocess.run(["espeak-ng", "-s", "165", "-p", "40", text], check=False)
+        subprocess.run(["espeak-ng", "-s", "165", "-p", "40", pronounce(text)], check=False)
 
 def setup(ctx):
     if not shutil.which("espeak-ng"):

@@ -1,7 +1,7 @@
 """Main voice: Kokoro neural TTS (local, free). Speaks sentence by sentence while the next one is generated.
 Owns its own voice commands: speak faster/slower, use the Heart voice, blend in some Nicole..."""
 import os, queue, re, threading, time
-from hommie.core import HERE, play_wav, sentences, temp_wav
+from hommie.core import HERE, play_wav, pronounce, sentences, temp_wav
 
 PRIORITY = 30
 REQUIRES = ["kokoro_onnx", "soundfile"]
@@ -48,6 +48,7 @@ class Kokoro:
         """Text -> path of a wav file (the caller plays and deletes it). Pre-rendered phrases come back instantly."""
         import soundfile as sf
         k = self._load()
+        text = pronounce(text)
         cached = self.cache.get(self._key(text))
         if cached is None:
             with self.mu:
