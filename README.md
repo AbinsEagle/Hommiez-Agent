@@ -9,6 +9,7 @@ Web UI: http://127.0.0.1:8765 whenever Hommie runs (plugins/ui_web.py; delete it
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # put the voice models in voices/ (see voices/README.md)
 # needs: the `claude` CLI logged in (claude.ai login, no API key), pw-record/pw-play (PipeWire)
+# optional: Groq / Gemini keys, see "Choosing the brain" below
 ./jarvis.py --plugins   # check what loaded
 ./jarvis.py --ui        # hands-free + web window
 ```
@@ -25,7 +26,8 @@ Settings are saved to `settings.json` (created on first change, not in git).
 
 | file | feature | delete it and... |
 |---|---|---|
-| brain_claude | Claude as the brain (+ "use the smart model") | no brain; only local commands work |
+| brain_claude | Claude (your claude.ai login) as a brain, with file/shell tools | Claude is no longer an option |
+| brain_router | the Brain switch: Claude / Groq / Gemini from a dropdown or by voice; Groq and Gemini get the same tools via `hommie/agent_tools.py` | Claude alone answers again |
 | tts_kokoro / tts_piper / tts_espeak | voices, best one that works is used | next voice takes over |
 | stt_whisper | microphone + speech recognition | no voice input; `--type` still works |
 | mode_wake / mode_typed | hands-free / keyboard front ends | that mode disappears |
@@ -37,6 +39,47 @@ Settings are saved to `settings.json` (created on first change, not in git).
 | obsidian | reads/searches your Obsidian vault, writes only to `Hommie/` ("note that ...") | Hommie stops knowing about Obsidian |
 | audio_aec | echo-free mic + interrupting her (barge-in) | she can't hear you while talking |
 | ui_web | web UI: orb, chat, settings panel, plugin toggles (`--ui`) | no UI; everything else unchanged |
+
+## Choosing the brain (Claude, Groq, Gemini)
+Pick who answers in the web UI: Settings, **Brain**, **Who answers**. Or say or type it:
+`use Groq` · `use Gemini` · `use Claude` · `use the smart model` · `use the fast model` · `which brain are you using`.
+The choice is saved in `settings.json` (`brain_router.choice`).
+
+| choice | good for | notes |
+|---|---|---|
+| Claude Haiku / Sonnet | the best at code and reasoning; uses your claude.ai quota | needs the `claude` CLI logged in |
+| Groq gpt-oss 20B / 120B | fast (about 1 s), free tier, the dependable everyday pick | free tier rate-limits bursts of tool calls (HTTP 429) |
+| Gemini 3.5 Flash / Pro | backup | free tier returns 429/503 often and is slow with tools; Pro has no free quota |
+
+Groq and Gemini act like Claude: they read, search and edit files, run shell commands and search your Brain
+(`hommie/agent_tools.py`), under the same rules. Reads and edits in the working folders are automatic; shell commands
+run unasked only if they are simple and on the allow list (`brain_claude.base_allow` + `ctx.allow()`); anything else is
+confirmed out loud; folders denied with `ctx.deny()` (the Brain, the Obsidian vault) stay read-only; and secret files
+(`.bashrc`, `.ssh`, `.env`, `auth.json`...) are never read, because their text is sent to a third-party API.
+
+### Add the API keys
+1. Get a free key: Groq at https://console.groq.com/keys, Gemini at https://aistudio.google.com/apikey.
+2. Put it in your shell config, typed yourself so it never lands in git or a chat. In Claude Code use the `!` prefix:
+   ```
+   echo 'export GROQ_API_KEY=your_key_here' >> ~/.bashrc
+   echo 'export GEMINI_API_KEY=your_key_here' >> ~/.bashrc
+   ```
+3. Restart Hommie. The plugin reads `GROQ_API_KEY` / `GEMINI_API_KEY` from the environment, and if they are not there
+   (the desktop icon does not load `.bashrc`) from the `export` lines in `~/.bashrc`. Keys are never stored in this repo.
+If a key is missing, Hommie says so out loud and does not fall back to Claude by itself (so it never spends your quota unasked).
+
+### Add a model or another provider
+Both are edits in `plugins/brain_router.py`, nothing else:
+- **A new model for an existing provider:** add a line to `CHOICES`, `("groq:<model id>", "Label shown in the dropdown")`.
+  Model ids come from `opencode models groq` / `opencode models google`, or the provider's models page.
+- **A new provider** (anything with an OpenAI-compatible chat API, e.g. OpenRouter, Together, Mistral): add an entry to `APIS`
+  (`name: (chat-completions URL, ENV_VAR_NAME, "Name to say aloud")`), add its models to `CHOICES` as `"name:<model id>"`,
+  put the key in `~/.bashrc`, and add the name to the `use X` regex in `setup()` so "use X" works by voice.
+  The model must support tool calling for the file/shell abilities to work.
+The dropdown is built from `CHOICES`, so it updates by itself. Delete `brain_router.py` to go back to Claude alone.
+
+For coding in a plain terminal (not Hommie), [opencode](https://opencode.ai) reads the same two keys; `opencode -m groq/openai/gpt-oss-120b`
+or `opencode -m google/gemini-3.5-flash`, and `/models` switches inside it.
 
 ## Add a feature
 Copy `plugins/_example.py` to `plugins/cmd_whatever.py` and edit. No other file changes.
