@@ -146,11 +146,17 @@ def is_yes(text):
 
 AUDIO = {"source": None, "sink": None}      # an echo-cancelling mic/speaker pair, when the audio_aec plugin made one
 PLAY = {"proc": None, "stop": False}         # the sound being played, so it can be cut off when you talk over her
+PLAY_HOOKS = []                                # functions called with each wav just before it plays (the ears use it to know what she is saying)
 
 def play_wav(path):
     try:
         if PLAY["stop"]:
             return
+        for hook in PLAY_HOOKS:
+            try:
+                hook(path)
+            except Exception:
+                pass
         cmd = ["pw-play"] + (["--target", AUDIO["sink"]] if AUDIO["sink"] else []) + [path]
         PLAY["proc"] = proc = subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
         if proc.wait() != 0 and AUDIO["sink"] and not PLAY["stop"]:
@@ -466,7 +472,10 @@ def main(argv=None):
     if "--plugins" not in argv:
         lock = single_instance()
         if lock is None:
-            print("Hommie is already running (another window or the desktop icon). Close that one first.")
+            msg = "Hommie is already running (another window or the desktop icon). Close that one first."
+            print(msg)
+            if not sys.stdout.isatty():                        # started from an icon with no terminal: say it on the desktop instead
+                subprocess.run(["notify-send", "Hommie", msg], check=False)
             return
         start_log()
     ctx = Context()

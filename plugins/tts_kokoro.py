@@ -16,7 +16,7 @@ VOICES = {
     "river": "af_river", "emma": "bf_emma", "isabella": "bf_isabella", "alice": "bf_alice", "lily": "bf_lily",
 }
 
-UI_TITLE = "Voice"
+UI_TITLE = "Voice: Kokoro (backup)"
 UI = [  # the web UI builds its settings panel from this; remove the plugin and the controls disappear with it
     {"key": "voice", "label": "Voice", "type": "select", "options": [[v, k.title()] for k, v in VOICES.items()]},
     {"key": "speed", "label": "Speed", "type": "range", "min": 0.7, "max": 1.4, "step": 0.02},

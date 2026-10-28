@@ -2,46 +2,60 @@
 Provides the "listen" service used by the voice modes."""
 import os, queue, re, signal, subprocess, tempfile, threading, time
 import numpy as np
-from hommie.core import AUDIO
+from hommie.core import AUDIO, PLAY_HOOKS
 
 PRIORITY = 35
 REQUIRES = ["faster_whisper", "numpy"]
 DEFAULTS = {"model": "base.en", "end_silence": 0.85, "threads": 4,
             "barge_in": True, "barge_gate": 400}   # talk over her to stop her (only with the echo canceller running)
 UI_TITLE = "Listening"
-UI = [{"key": "end_silence", "label": "Pause that ends a sentence (s)", "type": "range", "min": 0.3, "max": 1.2, "step": 0.05}]
+UI = [{"key": "end_silence", "label": "Pause that ends a sentence (s)", "type": "range", "min": 0.3, "max": 1.2, "step": 0.05},
+      {"key": "barge_in", "label": "Let me interrupt her by talking", "type": "toggle"}]
 RATE, FRAME = 16000, 480            # 30 ms of 16 kHz mono s16
 FRAME_BYTES = FRAME * 2
 
 class BargeDetector:
     """Decides when a loud sound while she is talking is YOU, not her own voice leaking back into the mic.
-    It learns how much of her voice leaks (the quiet-ish level while she speaks) and only reacts to something
-    clearly louder than that, for a sustained moment."""
-    WARMUP, NEED = 20, 12                  # ~0.6 s of listening first; then ~0.36 s of sustained loudness
+    It knows how loud she is playing right now (ref) and learns what fraction of that leaks into the mic; you are
+    judged to be talking when the mic is far louder than that fraction explains, for a sustained moment. Without a
+    playback reference it falls back to the loudness the mic had in its quiet moments."""
+    WARMUP, NEED, MARGIN, MIN_REF, MIN_RATIOS = 20, 12, 2.0, 200.0, 10   # NEED: ~0.36 s of sustained loudness
 
     def __init__(self, min_gate, floor):
         self.min_gate, self.floor = min_gate, floor
         self.reset()
 
     def reset(self):
-        self.leak, self.hits, self.gate, self.seen = [], 0, self.min_gate, 0
+        self.leak, self.ratios, self.hits, self.gate, self.seen = [], [], 0, self.min_gate, 0
 
-    def feed(self, rms):
+    def feed(self, rms, ref=None):
         """Returns True the moment you are judged to be talking over her."""
         self.seen += 1
-        if self.seen <= self.WARMUP:
+        learning = self.seen <= self.WARMUP
+        if learning:
             self.leak.append(rms)
+            if ref and ref > self.MIN_REF:
+                self.ratios.append(rms / ref)
             return False
-        loud = rms > self.gate
-        if not loud:                       # only quiet frames describe her leak; your voice must not raise the bar
-            self.leak.append(rms)
-        self.gate = max(self.min_gate, 3.5 * float(np.percentile(self.leak, 90)), 4 * self.floor())
+        base = max(self.min_gate, 4 * self.floor())
+        if len(self.ratios) >= self.MIN_RATIOS and ref is not None:
+            k = max(float(np.percentile(self.ratios, 90)), 0.02)       # how much of her voice reaches the mic
+            self.gate = max(base, self.MARGIN * k * ref + 3 * self.floor())
+            loud = rms > self.gate
+            if not loud and ref > self.MIN_REF:
+                self.ratios.append(rms / ref)
+        else:
+            loud = rms > self.gate
+            if not loud:                   # only quiet frames describe her leak; your voice must not raise the bar
+                self.leak.append(rms)
+            self.gate = max(base, 3.5 * float(np.percentile(self.leak, 90)))
         self.hits = self.hits + 1 if loud else max(0, self.hits - 1)
         return self.hits >= self.NEED
 
     def stats(self):
         a = np.array(self.leak or [0.0])
-        return f"mic level while she spoke: median {np.median(a):.0f}, p90 {np.percentile(a, 90):.0f}, max {a.max():.0f}; gate {self.gate:.0f}"
+        k = f"; {100 * float(np.percentile(self.ratios, 90)):.0f}% of her voice leaks" if self.ratios else ""
+        return f"mic level while she spoke: median {np.median(a):.0f}, p90 {np.percentile(a, 90):.0f}, max {a.max():.0f}; gate {self.gate:.0f}{k}"
 
 class Listener:
     def __init__(self, cfg, ctx):
@@ -49,6 +63,28 @@ class Listener:
         self.proc, self.q, self.floor = None, queue.Queue(), []
         self.armed = False                                 # armed while she speaks: you talking over her stops her
         self.barge = BargeDetector(cfg["barge_gate"], self._floor)
+        self.ref = []                                      # (time it started, loudness every 30 ms) of what she is playing
+        PLAY_HOOKS.append(self._on_play)
+
+    def _on_play(self, path):
+        """A sentence is about to be played: remember how loud it is over time, to tell her voice from yours."""
+        import soundfile as sf
+        data, rate = sf.read(path, dtype="int16", always_2d=True)
+        mono = data.astype(np.float32).mean(axis=1)
+        hop = max(1, int(rate * FRAME / 16000))
+        n = len(mono) // hop
+        env = np.sqrt((mono[:n * hop].reshape(n, hop) ** 2).mean(axis=1)) if n else np.zeros(0)
+        now = time.time()
+        self.ref = [r for r in self.ref if now - r[0] < 20] + [(now, env)]
+
+    def _ref_now(self, t):
+        """Loudest she was in the last ~0.5 s (speaker and room delay blur the exact moment, so look back a little)."""
+        best = 0.0
+        for t0, env in self.ref:
+            lo, hi = max(0, int((t - t0 - 0.5) / 0.03)), min(len(env) - 1, int((t - t0) / 0.03))
+            if hi >= lo:
+                best = max(best, float(env[lo:hi + 1].max()))
+        return best
 
     # microphone
     def ensure(self):
@@ -68,7 +104,7 @@ class Listener:
             a = np.frombuffer(buf, np.int16).astype(np.float32)
             rms = float(np.sqrt(np.mean(a * a)))
             self.level = 0.6 * self.level + 0.4 * min(1.0, rms / 4000.0)
-            if self.armed and self.barge.feed(rms):
+            if self.armed and self.barge.feed(rms, self._ref_now(time.time()) if self.ref else None):
                 self.armed = False
                 self.ctx.log("barge-in: " + self.barge.stats())
                 self.ctx.barge_in()

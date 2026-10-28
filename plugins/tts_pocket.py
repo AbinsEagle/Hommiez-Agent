@@ -7,7 +7,7 @@ from hommie.core import HERE, play_wav, pronounce, sentences, temp_wav
 PRIORITY = 36
 PRESETS = ["alba", "anna", "charles", "giovanni", "marius", "jean", "eve", "azelma", "cosette"]
 DEFAULTS = {"voice": "alba", "python": "~/tts-trial/.venv/bin/python", "threads": 4}
-UI_TITLE = "Voice (natural)"
+UI_TITLE = "Voice: Pocket (main)"
 UI = [{"key": "voice", "label": "Voice", "type": "select", "options": [[v, v.title()] for v in PRESETS]}]
 WORKER = os.path.join(HERE, "tools", "pocket_worker.py")
 _pocket = None
