@@ -92,6 +92,8 @@ class Guide:
 
     def _run(self, goal):
         history, event, n = [], "This is the first step.", 0
+        if self.cfg["model"].startswith("claude:"):
+            vision.EYE.warm(self.cfg["model"].split(":", 1)[1])            # start Claude while the first screenshot is taken
         try:
             while not self.stop.is_set() and n < self.cfg["max_steps"]:
                 img, res, err = self._look(goal, history, event)
@@ -119,6 +121,7 @@ class Guide:
                 pass
         finally:
             self.overlay(cmd="hide")
+            vision.EYE.close()
 
     def _show(self, res, img, n):
         label = res.get("label") or res.get("say") or ""
@@ -162,6 +165,7 @@ class Guide:
 
     def close(self):
         self.stop.set()
+        vision.EYE.close()
         try:
             self._send({"cmd": "quit"})
         except OSError:
@@ -201,6 +205,7 @@ def setup(ctx):
     def stop_cmd(m, text):
         g.stop.set()
         g.overlay(cmd="hide")
+        vision.EYE.close()
         return "Okay, guide closed."
 
     start_words = (r"guide me|walk me through|on (?:my )?screen|highlight|point (?:me )?(?:to|at)|show me where|"

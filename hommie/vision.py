@@ -96,43 +96,89 @@ def parse(text):
     except (AttributeError, ValueError):
         return None, "I couldn't make sense of what I saw. Try again."
 
-def ask_claude(img, goal, history, event, model="sonnet"):
-    """Same question, answered by Claude (your claude.ai login) reading the screenshot with its Read tool."""
-    if not shutil.which("claude"):
-        return None, "The claude command isn't available to look at your screen."
-    small = img.copy()
-    small.thumbnail((1280, 1280))
-    w, h = small.size
-    path = os.path.join(TMP, f"hommie-vision-{os.getpid()}.jpg")
-    small.save(path, "JPEG", quality=88)
-    prompt = (f"First use the Read tool to look at the screenshot file {path}. " +
-              PROMPT.format(w=w, h=h, goal=goal, event=event, history="; ".join(history) if history else "none yet",
-                            box_fmt="[x1, y1, x2, y2]", box_desc=f"in PIXELS of that {w}x{h} image, (0,0) at the top-left, x to the right") +
-              "\nReply with only the JSON object.")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}      # never let an API key take over billing
-    try:
-        out = subprocess.run(["claude", "-p", "--model", model, "--effort", "low", "--strict-mcp-config", "--disable-slash-commands",
-                              "--allowedTools", "Read", "--add-dir", TMP],
-                             input=prompt, capture_output=True, text=True, timeout=120, cwd=HERE, env=env)   # prompt on stdin: the flags above take lists
-    except (OSError, subprocess.SubprocessError):
-        return None, "Claude didn't answer in time."
-    finally:
+class ClaudeEye:
+    """Claude reading a screenshot, kept fast: a `claude` process is started ahead of time (while the user is busy clicking)
+    and the screenshot goes in as an image in the message, so a step costs one model turn instead of a process start plus a
+    file-read turn. Each process answers one question and a fresh one is started for the next, so no old screenshots pile up."""
+    def __init__(self):
+        self.proc, self.model = None, None
+
+    def warm(self, model):
+        if self.proc and self.proc.poll() is None and self.model == model:
+            return
+        self.close()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}      # never let an API key take over billing
         try:
-            os.unlink(path)
+            self.proc = subprocess.Popen(
+                ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--model", model,
+                 "--effort", "low", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", ""],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, cwd=tempfile.gettempdir(), env=env)
+            self.model = model
         except OSError:
+            self.proc = None
+
+    def close(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+        self.proc = None
+
+    def _answer(self, content):
+        """Send one message to the warm process and wait for its reply text; None if the process died."""
+        proc, self.proc = self.proc, None
+        try:
+            proc.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": content}}) + "\n")
+            proc.stdin.flush()
+            for line in proc.stdout:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("type") == "result":
+                    return e.get("result", "") if not e.get("is_error") else e.get("result", "") or None
+        except (BrokenPipeError, OSError):
             pass
-    res, err = parse(out.stdout)
-    if res and res.get("box"):             # pixels -> the 0-1000 [ymin, xmin, ymax, xmax] grid the overlay code uses
-        x1, y1, x2, y2 = res["box"]
-        res["box"] = [y1 / h * 1000, x1 / w * 1000, y2 / h * 1000, x2 / w * 1000]
-    if err and re.search(r"limit|quota", out.stdout, re.I):
-        err = "Claude says I've hit my usage limit for now."
-    return res, err
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+        return None
+
+    def ask(self, img, goal, history, event, model):
+        if not shutil.which("claude"):
+            return None, "The claude command isn't available to look at your screen."
+        small = img.copy()
+        small.thumbnail((1280, 1280))
+        w, h = small.size
+        buf = io.BytesIO()
+        small.save(buf, "JPEG", quality=85)
+        text = PROMPT.format(w=w, h=h, goal=goal, event=event, history="; ".join(history) if history else "none yet",
+                             box_fmt="[x1, y1, x2, y2]", box_desc=f"in PIXELS of this {w}x{h} image, (0,0) at the top-left, x to the right") \
+               + "\nReply with only the JSON object."
+        content = [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(buf.getvalue()).decode()}},
+                   {"type": "text", "text": text}]
+        out = None
+        for _ in range(2):                                      # a warm process that died while idle: start one and retry once
+            self.warm(model)
+            if self.proc:
+                out = self._answer(content)
+            if out is not None:
+                break
+        self.warm(model)                                        # start the next one now, while the user clicks
+        if out is None:
+            return None, "Claude didn't answer in time."
+        res, err = parse(out)
+        if res and res.get("box"):                              # pixels -> the 0-1000 [ymin, xmin, ymax, xmax] grid the overlay code uses
+            x1, y1, x2, y2 = res["box"]
+            res["box"] = [y1 / h * 1000, x1 / w * 1000, y2 / h * 1000, x2 / w * 1000]
+        if err and re.search(r"limit|quota", out, re.I):
+            err = "Claude says I've hit my usage limit for now."
+        return res, err
+
+EYE = ClaudeEye()
 
 def look(img, goal, history, event, model):
     """model is 'claude:sonnet', 'claude:haiku' or a Gemini model name."""
     if model.startswith("claude:"):
-        return ask_claude(img, goal, history, event, model.split(":", 1)[1])
+        return EYE.ask(img, goal, history, event, model.split(":", 1)[1])
     return ask(img, goal, history, event, model)
 
 def to_pixels(box, w, h):
