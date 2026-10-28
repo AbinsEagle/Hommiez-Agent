@@ -8,3 +8,8 @@ backup/
 # voice models are large (hundreds of MB): see voices/README.md
 voices/*
 !voices/README.md
+images/
+assets/
+freecad/*.FCStd
+freecad/*.step
+freecad/*.FCBak
