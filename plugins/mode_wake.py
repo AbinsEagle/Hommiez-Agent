@@ -3,9 +3,10 @@ import random, re, threading, time
 from hommie.core import is_yes
 
 PRIORITY = 60
-DEFAULTS = {"follow_up_seconds": 25, "confirm_seconds": 10}
+DEFAULTS = {"follow_up_seconds": 25, "confirm_seconds": 10, "auto_off_seconds": 60}
 UI_TITLE = "Conversation"
-UI = [{"key": "follow_up_seconds", "label": "Keep listening after a reply (s)", "type": "range", "min": 3, "max": 20, "step": 1}]
+UI = [{"key": "follow_up_seconds", "label": "Keep listening after a reply (s)", "type": "range", "min": 3, "max": 20, "step": 1},
+      {"key": "auto_off_seconds", "label": "Switch the mic off after quiet for (s, 0 = never)", "type": "range", "min": 0, "max": 600, "step": 15}]
 _NAME = r"(?:h[ao]m+[iey]+|home+y)"                       # Hommie / Homie / Hammy / Homey: whatever Whisper hears
 _GREET = r"(?:hey|hi|hello|hallo|hay|hiya|howdy|yo|okay|ok)"
 WAKE_RE = re.compile(                                      # "Hommie ...", "Hey/Hello Hommie ...", "... , Hommie"
@@ -55,22 +56,50 @@ class WakeMode:
         ctx.on("say", self.remember)
         ctx.confirm = lambda: is_yes(ears.hear(max_wait=self.cfg["confirm_seconds"]))
         ctx.wake_active, ctx.talk_now = True, False        # a UI's Talk button sets talk_now = "next phrase is for you"
+        ctx.mic_on, ctx.set_mic = True, lambda on: self.set_mic(ctx, ears, on)
+        self.quiet_until = self._deadline()
         try:
             self._loop(ctx, ears)
         finally:
             ctx.wake_active = False
 
+    def _deadline(self):
+        """When the mic switches itself off if nobody has spoken to her (None = never)."""
+        secs = self.cfg["auto_off_seconds"]
+        return time.monotonic() + secs if secs else None
+
+    def set_mic(self, ctx, ears, on, reason=""):
+        """Start / stop listening. Off means the microphone recording is closed, not just ignored."""
+        if bool(on) == ctx.mic_on:
+            return
+        ctx.mic_on = bool(on)
+        self.quiet_until = self._deadline()
+        if on:
+            ears.resume()
+        else:
+            ears.pause()
+            ctx.emit("state", state="idle")
+        ctx.emit("mic", on=ctx.mic_on, reason=reason)
+
     def _loop(self, ctx, ears):
         while not ctx.quit_requested:
+            if not ctx.mic_on:
+                time.sleep(0.25)
+                continue
             print("  (listening for the wake word)", flush=True)
-            heard = ears.hear()
-            if self.is_echo(heard):
+            left = None if self.quiet_until is None else max(0.5, self.quiet_until - time.monotonic())
+            heard = ears.hear(max_wait=left)
+            if not ctx.mic_on:
                 continue
+            echo = self.is_echo(heard)
             woke, command = strip_wake(heard)
-            if ctx.talk_now and heard:
+            if ctx.talk_now and heard and not echo:
                 woke, command, ctx.talk_now = True, command if woke else heard, False
-            if not woke:
+            if echo or not woke:
+                if self.quiet_until is not None and time.monotonic() >= self.quiet_until:
+                    self.set_mic(ctx, ears, False, "quiet")        # nobody has said the wake word for a while
                 continue
+            self.quiet_until = self._deadline()
             if not command:
                 ctx.say(self.ack())
                 command = self._next_command(ctx, ears, 10)
@@ -85,6 +114,7 @@ class WakeMode:
                     break
                 command = self._next_command(ctx, ears, self.cfg["follow_up_seconds"])
                 ctx.talk_now = False
+            self.quiet_until = self._deadline()                  # the clock starts again once the conversation ends
 
     def _next_command(self, ctx, ears, seconds):
         """Wait up to `seconds` for a real request. Noise, empty transcripts and a bare "Hommie" don't end the wait."""

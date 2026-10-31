@@ -1,7 +1,7 @@
 """The brain: one long-lived `claude` process (your claude.ai login, no API key), run from a neutral folder
 so each turn skips startup cost. Anything blocked is confirmed out loud, then allowed for that one action.
 Which model it runs (and Groq/Gemini instead) is chosen by brain_router.py."""
-import json, os, re, shutil, subprocess, threading
+import fnmatch, json, os, re, shutil, subprocess, threading
 from hommie.core import HERE
 
 PRIORITY = 40
@@ -87,7 +87,7 @@ class Brain:
         if self.ctx.ask_confirm():
             reply, _ = self._turn("The user confirmed. Go ahead and do it now.", extra_allow=[rule])
             return reply
-        return "Okay, I won't do that."
+        return "I didn't hear a yes, so I skipped that. Ask me again if you want it done."
 
     def _protected(self, denial):
         """True if a ctx.deny() rule (e.g. a read-only vault) covers this file edit."""
@@ -97,6 +97,9 @@ class Brain:
             m = re.match(r"(\w+)\(/(/.*?)/?\*\*\)$", rule)
             if m and m.group(1) == tool and path.startswith(os.path.realpath(m.group(2)) + os.sep):
                 return True
+            g = re.match(r"(\w+)\(/(/.*)\)$", rule)                  # a file pattern, e.g. Read(//repo/**/.env*)
+            if g and g.group(1) == tool and fnmatch.fnmatch(path, g.group(2).replace("**/", "*").replace("**", "*")):
+                return True
         return False
 
     @staticmethod
@@ -105,7 +108,9 @@ class Brain:
         tool, inp = denial.get("tool_name", "a tool"), denial.get("tool_input", {})
         if tool == "Bash":
             c = inp.get("command", "")
-            return inp.get("description") or "a shell command", f"Bash: {c}", f"Bash({c})"
+            words = c.split()
+            short = "run " + " ".join([words[0]] + [os.path.basename(w) for w in words[1:2]]) if words else "a shell command"
+            return inp.get("description") or short, f"Bash: {c}", f"Bash({c})"
         target = inp.get("file_path") or inp.get("path") or ""
         return f"{tool} {os.path.basename(target)}".strip(), f"{tool}: {target}", tool
 

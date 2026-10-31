@@ -22,7 +22,7 @@ class Mascot:
     def __init__(self, ctx, cfg):
         self.ctx, self.cfg = ctx, cfg
         self.proc, self.sock, self.lock = None, None, threading.Lock()
-        self.state, self.shown, self.look = "idle", None, None
+        self.state, self.shown, self.look, self.closed = "idle", None, None, False
 
     def _connect(self):
         s = socket.socket(socket.AF_UNIX)
@@ -46,6 +46,8 @@ class Mascot:
         return False
 
     def send(self, msg):
+        if self.closed and not msg.get("quit"):                    # shutting down: never bring the character back
+            return False
         data = (json.dumps(msg) + "\n").encode()
         with self.lock:
             for attempt in (1, 2):
@@ -82,6 +84,7 @@ class Mascot:
 
     def close(self):
         self.send({"quit": True})
+        self.closed = True
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
 
@@ -95,6 +98,7 @@ def setup(ctx):
     cfg = ctx.cfg("mascot", DEFAULTS)
     m = _mascot = Mascot(ctx, cfg)
     ctx.on("state", lambda state=None, **kw: m.set_state(state or "idle"))
+    ctx.on("closing", lambda **kw: m.close())                      # the window was closed: leave now, not after Hommie finishes quitting
     threading.Thread(target=m.watch, daemon=True).start()
 
     def show(m_, text):

@@ -28,12 +28,20 @@ def run(path):
         f.write(out.getvalue())
     os.remove(path)
 
+IDLE_CLOSE = 15 * 60          # an unused window is closed after this many seconds (FreeCAD asks first about unsaved work)
+last_work = time.time()
+
 def tick():
+    global last_work
     with open(BEAT, "w") as f:
         f.write(str(time.time()))
     for name in sorted(os.listdir(INBOX)):
         if name.endswith(".py"):
             run(os.path.join(INBOX, name))
+            last_work = time.time()
+    if time.time() - last_work > IDLE_CLOSE:
+        timer.stop()
+        FreeCADGui.getMainWindow().close()
 
 timer = QtCore.QTimer()
 timer.timeout.connect(tick)

@@ -13,3 +13,5 @@ assets/
 freecad/*.FCStd
 freecad/*.step
 freecad/*.FCBak
+
+projects/*/.session

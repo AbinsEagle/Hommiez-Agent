@@ -47,7 +47,13 @@ class Overlay(Gtk.Window):
                 x1, y1, x2, y2 = msg["box"]
                 box = (min(x1, x2) * fx, min(y1, y2) * fy, max(x1, x2) * fx, max(y1, y2) * fy)
             old = self.step["target"] if self.step and self.step["target"] else self.cur
-            self.step = {"box": box, "n": msg.get("n", 1), "label": msg.get("label", ""),
+            arrow = None
+            if cmd == "show" and msg.get("arrow"):                # a big pointing arrow instead of a box
+                sw, sh = msg.get("screen") or [self.W, self.H]
+                ax, ay = msg["arrow"][0] * self.W / sw, msg["arrow"][1] * self.H / sh
+                box = (ax - 3, ay - 3, ax + 3, ay + 3)
+                arrow = (ax, ay, msg.get("from_deg", 225))        # 225 = the arrow comes in from the upper left
+            self.step = {"box": box, "n": msg.get("n", 1), "label": msg.get("label", ""), "arrow": arrow,
                          "target": ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2) if box else None, "from": old}
             self.t0 = time.time()
             self.show_all()
@@ -79,7 +85,10 @@ class Overlay(Gtk.Window):
             return
         t = min(1.0, (time.time() - self.t0) / INTRO)
         ease = 1 - (1 - min(1.0, t / 0.55)) ** 3                 # cursor glides in during the first half
-        if s["box"]:
+        if s.get("arrow"):
+            self.draw_arrow(cr, *s["arrow"], t)
+            self.cur = s["target"]
+        elif s["box"]:
             self.draw_box(cr, s["box"], t)
             fx, fy = s["from"]
             tx, ty = s["target"]
@@ -104,6 +113,33 @@ class Overlay(Gtk.Window):
             cr.set_source_rgba(*ACCENT, 0.6 * (1 - t))
             cr.set_line_width(3)
             cr.stroke()
+
+    def draw_arrow(self, cr, x, y, from_deg, t):
+        """Chunky amber arrow whose tip sits on (x, y), arriving from the from_deg direction (screen angle, y down)
+        and sliding the last few pixels in during the intro."""
+        slide = 30 * (1 - min(1.0, t / 0.55)) ** 2
+        cr.save()
+        cr.translate(x, y)
+        cr.rotate(math.radians(from_deg))                       # local +x now points away from the tip
+        cr.translate(slide, 0)
+        length, head, shaft_h, head_h = 90, 34, 9, 30
+        pts = [(0, 0), (head, -head_h), (head, -shaft_h), (length, -shaft_h),
+               (length, shaft_h), (head, shaft_h), (head, head_h)]
+        for dx, dy, col in ((3, 4, (0, 0, 0, 0.35)), (0, 0, None)):
+            cr.move_to(pts[0][0] + dx, pts[0][1] + dy)
+            for px, py in pts[1:]:
+                cr.line_to(px + dx, py + dy)
+            cr.close_path()
+            if col:
+                cr.set_source_rgba(*col)
+                cr.fill()
+            else:
+                cr.set_source_rgba(*ACCENT, 1)
+                cr.fill_preserve()
+                cr.set_source_rgba(0.1, 0.1, 0.1, 1)
+                cr.set_line_width(2)
+                cr.stroke()
+        cr.restore()
 
     def draw_cursor(self, cr, x, y):
         pts = [(0, 0), (0, 19), (4.5, 15), (8, 22), (11, 20.5), (7.5, 14), (13, 14)]   # arrow with its tip at (x, y)

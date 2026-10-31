@@ -69,18 +69,73 @@ class Rig:
         self.hands = {n: png(n) for n in ("hand_up", "hand_low")}
         self.loose = {n: png(n) for n in ("sparkle1", "sparkle2", "dash1", "dash2")}
 
-    def draw_hand(self, cr, name, angle):
+    def draw_hand(self, cr, name, angle, lift=0.0):
+        """Paint the hand pose nearest to (tilt angle in degrees, lift in px; negative = up). Combinations that tear are held back."""
         m = self.meta[name]
         x0, y0, x1, y1 = m["rect"]
         w, h = x1 - x0, y1 - y0
-        i = int(round(max(m["amin"], min(m["amax"], angle)))) - m["amin"]
+        if name == "hand_up":
+            lift = max(lift, -9.0 + 1.3 * max(0.0, angle))      # tilted up AND lifted high pulls the fist off the head
+        else:
+            lift = max(lift, -9.0 + 0.5 * max(0.0, angle - 6.0))
+        i = int(round((max(m["amin"], min(m["amax"], angle)) - m["amin"]) / m["astep"]))
+        j = int(round((max(m["dmin"], min(m["dmax"], lift)) - m["dmin"]) / m["dstep"]))
         cr.save()
         cr.rectangle(x0, y0, w, h)
         cr.clip()
-        cr.set_source_surface(self.hands[name], x0 - i * w, y0)
-        cr.get_source().set_filter(cairo.FILTER_GOOD)
+        cr.set_source_surface(self.hands[name], x0 - i * w, y0 - j * h)
         cr.paint()
         cr.restore()
+
+# where the head's right outline is, row by row: the arm beside it can lean without dragging the head along
+HEAD_Y = (57, 62, 70, 80, 90, 100, 110, 120, 150, 160, 170, 180, 190, 215)
+HEAD_X = (236, 238, 246, 258, 265, 269, 272, 274, 274, 273, 270, 264, 252, 245)
+ARM_ROWS = 3                                            # the lean is applied in strips this tall (whole pixels, so no seams)
+
+def smooth(t):
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
+
+def head_x(y):
+    if y <= HEAD_Y[0]:
+        return HEAD_X[0]
+    for i in range(1, len(HEAD_Y)):
+        if y <= HEAD_Y[i]:
+            t = (y - HEAD_Y[i - 1]) / (HEAD_Y[i] - HEAD_Y[i - 1])
+            return HEAD_X[i - 1] + t * (HEAD_X[i] - HEAD_X[i - 1])
+    return HEAD_X[-1]
+
+def lean_arm(src, dst, amount, width):
+    """Draw `src` into `dst` with the raised arm leaning sideways by `amount` px at the top, fading to nothing at the shoulder.
+    Left of the head's outline nothing moves; right of it every row is stretched, so the arm swings out and in like rubber."""
+    cr = cairo.Context(dst)
+    cr.set_operator(cairo.OPERATOR_SOURCE)
+    cr.set_source_rgba(0, 0, 0, 0)
+    cr.paint()
+    cr.set_operator(cairo.OPERATOR_OVER)
+    edge = 300.0                                         # the sprite's right edge (the arm's outer outline ends just inside it)
+    for y0 in range(0, 216, ARM_ROWS):
+        y = y0 + ARM_ROWS / 2.0
+        d = amount * smooth((215.0 - y) / 160.0)
+        xs = head_x(y)
+        dl = d * (1.0 - smooth((y - 52.0) / 12.0))       # above the head the whole row moves; beside the head only the arm does
+        f = (edge + d - xs - dl) / (edge - xs)
+        cr.save()
+        if y < 52:
+            cr.rectangle(0, y0, width, ARM_ROWS); cr.clip()
+            cr.set_source_surface(src, d, 0); cr.paint()
+        else:
+            cr.rectangle(0, y0, xs + dl + 1, ARM_ROWS); cr.clip()
+            cr.set_source_surface(src, dl, 0); cr.paint()
+            cr.reset_clip()
+            cr.rectangle(xs + dl, y0, width, ARM_ROWS); cr.clip()
+            cr.translate(xs + dl, 0); cr.scale(f, 1.0); cr.translate(-xs, 0)
+            cr.set_source_surface(src, 0, 0); cr.paint()
+        cr.restore()
+    cr.save()
+    cr.rectangle(0, 216, width, 300); cr.clip()
+    cr.set_source_surface(src, 0, 0); cr.paint()
+    cr.restore()
 
 class Clip(Gtk.Window):
     def __init__(self):
@@ -204,22 +259,24 @@ class Clip(Gtk.Window):
     def init_motion(self):
         sp = lambda k, z, x=0.0: Spring(x, k, z)
         self.sp = {"lean": sp(55, 0.62), "bob": sp(150, 0.5), "grow": sp(70, 0.7, 1.0), "squash": sp(230, 0.42),
-                   "up": sp(190, 0.5, -1.5), "low": sp(190, 0.5, 2.0), "exc": sp(16, 1.0)}
+                   "up": sp(170, 0.5, -1.5), "low": sp(170, 0.5, 2.0), "exc": sp(16, 1.0),
+                   "arm": sp(90, 0.45), "upl": sp(140, 0.5), "lowl": sp(140, 0.5)}      # arm: the whole raised arm leaning; upl/lowl: hands lifting
         self.sp["grow"].target = 1.0
         self.last_now, self.lv, self.s1, self.s2 = None, 0.0, 0.0, 0.0
         self.gest, self.next_gest = ("none", -9.0), 6.0
+        self.off = self.off2 = None
 
     def on_state(self, old, new):
         """A state change gets a small physical 'reaction' on top of the new pose: anticipation, a hop, an inhale."""
         sp = self.sp
         if new == "listening":
-            sp["squash"].v += 3.2; sp["bob"].v -= 150; sp["up"].v += 55
+            sp["squash"].v += 3.2; sp["bob"].v -= 150; sp["up"].v += 55; sp["arm"].v += 60; sp["upl"].v -= 40
         elif new == "thinking":
-            sp["lean"].v += 22; sp["up"].v -= 60; sp["squash"].v -= 1.0
+            sp["lean"].v += 22; sp["up"].v -= 60; sp["squash"].v -= 1.0; sp["arm"].v -= 50
         elif new == "speaking":
-            sp["grow"].v += 0.55; sp["bob"].v -= 70; sp["low"].v += 40
+            sp["grow"].v += 0.55; sp["bob"].v -= 70; sp["low"].v += 40; sp["lowl"].v -= 30
         elif new == "idle":
-            sp["exc"].x = max(sp["exc"].x, 0.8); sp["squash"].v -= 2.2; sp["lean"].v -= 10
+            sp["exc"].x = max(sp["exc"].x, 0.8); sp["squash"].v -= 2.2; sp["lean"].v -= 10; sp["arm"].v -= 40
 
     def advance(self, dt, now):
         """Work out where everything wants to be for the current state, then let the springs carry it there."""
@@ -229,37 +286,48 @@ class Clip(Gtk.Window):
         self.s1 = abs(math.sin(now * 12.5) * 0.6 + math.sin(now * 8.1) * 0.4) if talk else self.s1 * 0.85
         self.s2 = abs(math.sin(now * 9.7 + 1.3) * 0.55 + math.sin(now * 6.3 + 0.4) * 0.45) if talk else self.s2 * 0.85
         s1, s2, lv = self.s1, self.s2, self.lv
-        up_off = low_off = 0.0
+        up_a = low_a = arm = upl = lowl = 0.0                  # what the current gesture adds on top of the resting pose
         if st == "idle" and now > self.next_gest:               # now and then it does something on its own, never twice alike in a row
-            kinds = [k for k in ("point", "flourish", "wiggle") if k != self.gest[0]]
+            kinds = [k for k in ("point", "flourish", "wiggle", "wave") if k != self.gest[0]]
             self.gest, self.next_gest = (random.choice(kinds), now), now + random.uniform(9.0, 17.0)
         kind, t0 = self.gest
         u = now - t0
         if st == "idle":
-            if kind == "point":
-                low_off = 13.0 * bump(u / 0.5); sp["squash"].v += 0.4 * bump(u / 0.5) if u < 0.05 else 0
-            elif kind == "flourish":
-                up_off = -13.0 * bump(u / 0.9)
+            if kind == "point":                                 # the lower hand lifts and points up
+                low_a, lowl, arm = 13.0 * bump(u / 0.55), -7.0 * bump(u / 0.55), 2.0 * bump(u / 0.7)
+            elif kind == "flourish":                            # the raised arm swings out, the hand dips, sparkles burst
+                arm, up_a, upl = 14.0 * bump(u / 1.0), -13.0 * bump(u / 0.9), -7.0 * bump(u / 1.0)
                 if 0 <= u < dt * 1.5:
                     sp["exc"].x = 1.0
             elif kind == "wiggle":
-                low_off = 9.0 * math.sin(2 * math.pi * 3.2 * u) * math.exp(-2.4 * u) if 0 <= u < 1.6 else 0.0
+                low_a = 9.0 * math.sin(2 * math.pi * 3.2 * u) * math.exp(-2.4 * u) if 0 <= u < 1.6 else 0.0
+                lowl = -3.0 * bump(u / 1.2)
+            elif kind == "wave":                                # the whole arm waves, the hand following a beat behind
+                if 0 <= u < 2.4:
+                    env = math.exp(-1.3 * u)
+                    arm = 13.0 * math.sin(2 * math.pi * 1.5 * u) * env
+                    up_a = -8.0 * math.sin(2 * math.pi * 1.5 * u - 0.9) * env
+                    upl = -4.0 * abs(math.sin(2 * math.pi * 1.5 * u)) * env
         if st == "idle":
             tg = dict(lean=0.9 * math.sin(now * 0.55) + 0.5 * math.sin(now * 1.3 + 2), bob=1.6 * math.sin(now * 1.0), grow=1.0,
-                      squash=0.010 * math.sin(now * 1.7), up=-1.5 + 1.2 * math.sin(now * 0.8 + 1) + up_off,
-                      low=2.0 + 1.5 * math.sin(now * 1.15) + low_off)
+                      squash=0.010 * math.sin(now * 1.7), up=-1.5 + 1.2 * math.sin(now * 0.8 + 1) + up_a,
+                      low=2.0 + 1.5 * math.sin(now * 1.15) + low_a, arm=1.4 * math.sin(now * 0.7) + arm,
+                      upl=0.8 * math.sin(now * 0.9 + 1) + upl, lowl=0.8 * math.sin(now * 1.2) + lowl)
         elif st == "listening":
             flick = (4.0 + 8.0 * lv) * math.sin(2 * math.pi * 2.0 * now)
             tg = dict(lean=-6.0 + 0.8 * math.sin(now * 1.1), bob=0.8 * math.sin(now * 2.2), grow=1.05,
-                      squash=0.012 * math.sin(now * 2.4), up=4.0 + 1.5 * math.sin(now * 4.4), low=7.0 + flick)
+                      squash=0.012 * math.sin(now * 2.4), up=4.0 + 1.5 * math.sin(now * 4.4), low=7.0 + flick,
+                      arm=8.0 + 3.0 * lv, upl=-4.0 - 2.0 * lv, lowl=-2.0 - 3.0 * lv)
         elif st == "thinking":
             x = now % 2.2
             tap = max(0.0, math.sin(2 * math.pi * x * 2.5)) ** 2 if x < 1.2 else 0.0      # tap, tap, tap ... pause
             tg = dict(lean=4.5 + 2.0 * math.sin(now * 0.9), bob=1.2 * math.sin(now * 1.6), grow=1.0,
-                      squash=0.012 * math.sin(now * 1.3), up=-8.0 + 2.0 * math.sin(now * 0.9), low=1.0 + 12.0 * tap)
+                      squash=0.012 * math.sin(now * 1.3), up=-8.0 + 2.0 * math.sin(now * 0.9), low=1.0 + 12.0 * tap,
+                      arm=-6.5 + 1.5 * math.sin(now * 0.9), upl=3.0, lowl=-4.0 * tap)
         else:                                                                                # speaking
             tg = dict(lean=1.4 * math.sin(now * 2.1) * (0.4 + 0.6 * s1), bob=-3.5 * abs(math.sin(now * 5.5)) * (0.4 + 0.6 * s1), grow=1.0,
-                      squash=0.045 * s1 - 0.01, up=-6.0 + 11.0 * s2, low=1.0 + 13.0 * s1)
+                      squash=0.045 * s1 - 0.01, up=-6.0 + 11.0 * s2, low=1.0 + 13.0 * s1,
+                      arm=2.0 + 11.0 * s2, upl=-6.0 * s2, lowl=-5.0 * s1)
         for k, v in tg.items():
             sp[k].target = v
         # follow-through: the hands lag behind the body, so they swing the other way when it moves
@@ -300,7 +368,23 @@ class Clip(Gtk.Window):
             cr.paint_with_alpha(max(0.0, min(1.0, alpha)))
             cr.restore()
         cr.restore()
-        # the body, tilting and bouncing from its feet, with the hands drawn on top at their bend
+        # the body and both hands are put together once at full size, the raised arm is leaned, and the result is placed on screen
+        if self.off is None:
+            self.off = cairo.ImageSurface(cairo.FORMAT_ARGB32, sw + 40, sh)
+            self.off2 = cairo.ImageSurface(cairo.FORMAT_ARGB32, sw + 40, sh)
+        oc = cairo.Context(self.off)
+        oc.set_operator(cairo.OPERATOR_SOURCE); oc.set_source_rgba(0, 0, 0, 0); oc.paint(); oc.set_operator(cairo.OPERATOR_OVER)
+        oc.set_source_surface(rig.base, 0, 0)
+        oc.paint()
+        rig.draw_hand(oc, "hand_up", sp["up"].x, sp["upl"].x)
+        rig.draw_hand(oc, "hand_low", sp["low"].x, sp["lowl"].x)
+        if self.state == "speaking":
+            self.draw_mouth(oc, self.s1)
+        arm = sp["arm"].x
+        final = self.off
+        if abs(arm) > 0.25:
+            lean_arm(self.off, self.off2, max(-12.0, min(14.0, arm)), sw + 40)
+            final = self.off2
         sq = sp["squash"].x
         grow = sp["grow"].x
         cr.save()
@@ -308,13 +392,9 @@ class Clip(Gtk.Window):
         cr.rotate(math.radians(lean))
         cr.scale((1.0 - 0.6 * sq) * grow * unit, (1.0 + sq) * grow * unit)
         cr.translate(-sw / 2, -sh)
-        cr.set_source_surface(rig.base, 0, 0)
+        cr.set_source_surface(final, 0, 0)
         cr.get_source().set_filter(cairo.FILTER_GOOD)
         cr.paint()
-        rig.draw_hand(cr, "hand_up", sp["up"].x)
-        rig.draw_hand(cr, "hand_low", sp["low"].x)
-        if self.state == "speaking":
-            self.draw_mouth(cr, self.s1)
         cr.restore()
         if self.state == "listening":                            # ripples beside its ear
             cr.new_path()
@@ -322,7 +402,7 @@ class Clip(Gtk.Window):
                 ph = (now * 1.3 + i / 3.0) % 1.0
                 cr.set_source_rgba(0.35, 0.65, 1.0, (1 - ph) * (0.4 + lv * 0.6))
                 cr.set_line_width(2.6)
-                cr.arc(W / 2 + 20, 130, 52 + ph * (16 + lv * 26), math.radians(-38), math.radians(38))
+                cr.arc(W / 2 + 20 + max(0.0, arm) * 0.5, 130, 52 + ph * (16 + lv * 26), math.radians(-38), math.radians(38))
                 cr.stroke()
 
     @staticmethod

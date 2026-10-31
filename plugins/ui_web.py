@@ -30,6 +30,7 @@ class WebUI:
         ctx.on("reply", self._reply)
         ctx.on("say", self._say)
         ctx.on("state", self._state)
+        ctx.on("mic", self._mic)
         ctx.on("log", self._log)
 
     # ── events from Hommie -> browser ──
@@ -77,6 +78,9 @@ class WebUI:
         self.state = state
         self.broadcast({"type": "state", "state": state})
 
+    def _mic(self, on, reason="", **kw):
+        self.broadcast({"type": "mic", "on": on, "reason": reason})
+
     def broadcast(self, msg):
         data = json.dumps(msg)
         with self.lock:
@@ -114,6 +118,66 @@ class WebUI:
                     text = ""
                 out.append({"plugin": name, "id": q["id"], "label": q["label"], "status": text})
         return out
+
+    def adds_view(self):
+        """Input-and-button forms for the dashboard: a plugin lists one in ADD = {"title", "label", "placeholder", "action": fn(ctx, text) -> {"note", "ask"}}."""
+        out = []
+        for name, (mod, status) in self.ctx.plugins.items():
+            a = getattr(mod, "ADD", None) if status == "ok" else None
+            if isinstance(a, dict):
+                try:
+                    items = a["items"](self.ctx) if a.get("items") else []
+                except Exception:
+                    items = []
+                out.append({"plugin": name, "title": a.get("title", name), "label": a.get("label", "Add"),
+                            "placeholder": a.get("placeholder", ""), "items": items})
+        return out
+
+    def run_add(self, plugin, text):
+        mod = self.ctx.plugins.get(plugin, (None, ""))[0]
+        a = getattr(mod, "ADD", None)
+        text = str(text or "").strip()[:200]
+        if not isinstance(a, dict) or not text:
+            return False
+        def work():
+            try:
+                res = a["action"](self.ctx, text) or {}
+            except Exception as e:
+                res = {"note": f"{a.get('label', 'Add')} failed: {e}"}
+            if res.get("note"):
+                self.broadcast({"type": "note", "text": res["note"]})
+            self.broadcast({"type": "settings", "settings": self.settings_view()})
+            self.broadcast({"type": "adds", "adds": self.adds_view()})
+            if res.get("ask"):
+                self.request(res["ask"])
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def get_detail(self, plugin, ident):
+        a = getattr(self.ctx.plugins.get(plugin, (None, ""))[0], "ADD", None)
+        if not isinstance(a, dict) or not a.get("detail"):
+            return {}
+        try:
+            return a["detail"](self.ctx, str(ident or "")[:80]) or {}
+        except Exception:
+            return {}
+
+    def run_pick(self, plugin, ident, key="pick"):
+        mod = self.ctx.plugins.get(plugin, (None, ""))[0]
+        a = getattr(mod, "ADD", None)
+        if not isinstance(a, dict) or not a.get(key) or not ident:
+            return False
+        def work():
+            try:
+                res = a[key](self.ctx, str(ident)[:80]) or {}
+            except Exception as e:
+                res = {"note": f"That failed: {e}"}
+            if res.get("note"):
+                self.broadcast({"type": "note", "text": res["note"]})
+            self.broadcast({"type": "settings", "settings": self.settings_view()})
+            self.broadcast({"type": "adds", "adds": self.adds_view()})
+        threading.Thread(target=work, daemon=True).start()
+        return True
 
     def add_images(self, urls, text):
         """Pictures pasted/dropped in the window: save them (images plugin) and ask Hommie about them."""
@@ -169,6 +233,7 @@ class WebUI:
                 "activity": list(self.activity), "stats": self.stats_view(), "nodes": self.nodes_view(),
                 "settings": self.settings_view(), "plugins": self.plugins_view(),
                 "dirs": list(self.ctx.dirs), "can_listen": self.ctx.service("listen") is not None,
+                "adds": self.adds_view(), "can_mic": hasattr(self.ctx, "set_mic"), "mic_on": getattr(self.ctx, "mic_on", True),
                 "can_images": self.ctx.plugins.get("images", (None, ""))[1] == "ok"}
 
     # ── actions from the browser ──
@@ -187,6 +252,8 @@ class WebUI:
         if not ears:
             return
         if getattr(self.ctx, "wake_active", False):   # hands-free mode already owns the mic: just skip its wake word
+            if not getattr(self.ctx, "mic_on", True):
+                self.ctx.set_mic(True)
             self.ctx.talk_now = True
             self._state("listening")
             return
@@ -309,10 +376,14 @@ class WebUI:
                     body = json.loads(self.rfile.read(n) or b"{}")
                 except ValueError:
                     return self._send(400, b"bad json")
+                if path == "/api/detail":
+                    return self._send(200, json.dumps(ui.get_detail(body.get("plugin"), body.get("id"))).encode(), "application/json")
                 if path == "/api/say" and str(body.get("text", "")).strip():
                     ui.request(str(body["text"]).strip()[:2000])
                 elif path == "/api/listen":
                     ui.listen_once()
+                elif path == "/api/mic" and hasattr(ui.ctx, "set_mic"):
+                    ui.ctx.set_mic(bool(body.get("on")))
                 elif path == "/api/confirm":
                     ui.answer(body.get("id"), body.get("ok"))
                 elif path == "/api/setting":
@@ -321,6 +392,12 @@ class WebUI:
                     err = ui.add_images(body.get("images"), body.get("text"))
                     if err:
                         return self._send(400, json.dumps({"ok": False, "error": err}).encode(), "application/json")
+                elif path == "/api/archive":
+                    ok = ui.run_pick(body.get("plugin"), body.get("id"), "archive")
+                elif path == "/api/pick":
+                    ok = ui.run_pick(body.get("plugin"), body.get("id"))
+                elif path == "/api/add":
+                    ok = ui.run_add(body.get("plugin"), body.get("text"))
                 elif path == "/api/quick":
                     ok = ui.run_quick(body.get("plugin"), body.get("id"))
                 elif path == "/api/plugin":
@@ -365,10 +442,18 @@ class WebUI:
             self.seen_client, self.gone_since = True, None
         elif self.seen_client:
             self.gone_since = self.gone_since or time.time()
-            if time.time() - self.gone_since > 12:
+            if time.time() - self.gone_since > 5:
                 self.watch_window = False
                 self.ctx.log("window closed, quitting")
+                self.ctx.emit("closing")                           # things on the desktop (the character) go away at once
                 self.ctx.quit_requested = True
+                threading.Timer(8.0, self._force_exit).start()     # still here after 8 s (stuck in a long reply)? end her
+
+    def _force_exit(self):
+        try:
+            self.ctx.shutdown()
+        finally:
+            os._exit(0)
 
     def stop(self):
         if self.server:

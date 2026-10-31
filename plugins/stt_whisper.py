@@ -62,6 +62,7 @@ class Listener:
         self.cfg, self.model, self.ctx, self.level = cfg, None, ctx, 0.0   # level: 0..1 mic loudness, for UIs
         self.proc, self.q, self.floor = None, queue.Queue(), []
         self.armed = False                                 # armed while she speaks: you talking over her stops her
+        self.paused = False                                # mic switched off from the window or by the idle timeout
         self.barge = BargeDetector(cfg["barge_gate"], self._floor)
         self.ref = []                                      # (time it started, loudness every 30 ms) of what she is playing
         PLAY_HOOKS.append(self._on_play)
@@ -88,7 +89,7 @@ class Listener:
 
     # microphone
     def ensure(self):
-        if self.proc and self.proc.poll() is None:
+        if self.paused or (self.proc and self.proc.poll() is None):
             return
         target = ["--target", AUDIO["source"]] if AUDIO["source"] else []
         self.proc = subprocess.Popen(["pw-record", *target, "--rate", str(RATE), "--channels", "1", "--format", "s16", "-"],
@@ -121,15 +122,27 @@ class Listener:
 
     def _frames(self):
         self.ensure()
-        while True:
+        while not self.ctx.quit_requested and not self.paused:     # quitting or mic switched off: end the wait at once
             try:
-                yield self.q.get(timeout=3)
+                yield self.q.get(timeout=0.5)
             except queue.Empty:
                 self.ensure()
 
     def stop(self):
         if self.proc and self.proc.poll() is None:
             self.proc.send_signal(signal.SIGINT)
+
+    def pause(self):
+        """Mic off: the recording stops completely (nothing is listened to, nothing is transcribed)."""
+        self.paused = True
+        self.armed = False
+        self.stop()
+        self.flush()
+
+    def resume(self):
+        self.paused = False
+        self.flush()
+        self.ensure()
 
     # speech to text
     def load(self):

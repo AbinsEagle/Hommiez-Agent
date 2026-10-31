@@ -61,6 +61,7 @@ button,select,input{font:inherit;color:inherit}
 #stage{position:absolute;inset:0;width:100%;height:100%}
 .core .ft{position:absolute;left:0;right:0;bottom:14px;display:flex;flex-direction:column;align-items:center;gap:8px;z-index:1}
 #label{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.core .ft .row{display:flex;gap:8px}#power{border-radius:999px;padding:0 18px}#power.off{background:color-mix(in srgb,#ea4335 14%,transparent);border-color:color-mix(in srgb,#ea4335 45%,transparent);color:#ea4335}
 #mic{border-radius:999px;padding:0 22px;background:var(--card-solid);box-shadow:0 6px 18px -8px rgba(0,0,0,.4)}#mic[aria-pressed=true]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .chat{flex:1 1 48%;min-height:200px}
 #log{flex:1;overflow-y:auto;padding:14px 18px;display:flex;flex-direction:column;gap:10px;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
@@ -88,6 +89,11 @@ form{display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
 aside{position:fixed;top:0;right:0;bottom:0;width:min(380px,100vw);background:var(--card-solid);border-left:1px solid var(--line);transform:translateX(100%);transition:transform .25s;overflow-y:auto;padding:18px;z-index:9;box-shadow:-20px 0 50px -30px rgba(0,0,0,.5)}
 aside.open{transform:none}@media (prefers-reduced-motion:reduce){aside{transition:none}}
 aside h2{font-size:12px;letter-spacing:.04em;color:var(--muted);margin:22px 0 8px}aside h2:first-of-type{margin-top:8px}
+.irow{display:flex;gap:6px}.btn.ghost{background:transparent;font-size:12px;padding:0 12px}
+.detail{margin:0 0 12px;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--fill);display:grid;gap:6px}.detail h3{margin:0;font-size:15px}.detail h4{margin:6px 0 0;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.detail .kv{display:flex;gap:8px;font-size:12px;word-break:break-all}.detail .k{color:var(--muted);min-width:92px}.detail a{color:var(--accent)}
+.detail pre{margin:0;white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monospace;max-height:220px;overflow:auto}
+.addf{display:flex;gap:8px}.addf input{flex:1;min-width:0;min-height:40px;padding:0 12px;border-radius:12px;border:1px solid var(--line);background:var(--fill)}.addf .btn{min-height:40px}
 .field{display:grid;gap:4px;margin:10px 0}.field label{font-size:13px;color:var(--muted);display:flex;justify-content:space-between}
 .field select,.field input[type=range]{width:100%;accent-color:var(--accent)}.field select{min-height:40px;border-radius:12px;border:1px solid var(--line);background-color:var(--card-solid);color:var(--ink);padding:0 10px}
 select option{background-color:var(--card-solid);color:var(--ink)}
@@ -118,6 +124,7 @@ select option{background-color:var(--card-solid);color:var(--ink)}
   </div></div>
   <div class="card"><h2>In use</h2><div class="body" id="inuse"></div></div>
   <div class="card"><h2>Quick actions</h2><div class="body quick" id="quick"></div></div>
+  <div id="adds"></div>
   <div class="card"><h2>Plugins</h2><div class="body" id="plugins"></div><p class="muted" id="restart" hidden style="padding:0 16px 14px;margin:0">Restart Hommie to apply plugin changes.</p></div>
  </section>
 
@@ -126,7 +133,7 @@ select option{background-color:var(--card-solid);color:var(--ink)}
   <section class="card core" aria-label="Hommie">
    <div class="hd"><h2>Assistant core <span class="pill" style="margin-left:6px" id="mode">idle</span></h2><span class="cnt"><b id="nlit">0</b> active · <span id="ntot">0</span> parts</span></div>
    <canvas id="stage" aria-hidden="true"></canvas>
-   <div class="ft"><div id="label">idle</div><button class="btn" id="mic" aria-pressed="false">🎤 Talk</button></div>
+   <div class="ft"><div id="label">idle</div><div class="row"><button class="btn" id="power" aria-pressed="true" hidden>Stop mic</button><button class="btn" id="mic" aria-pressed="false">🎤 Talk</button></div></div>
   </section>
   <section class="card chat" aria-label="Conversation"><h2>Conversation</h2>
    <div id="log" role="log" aria-live="polite"><div class="empty" id="empty">Say “Hey Hommie…”, press Talk, or type below.</div></div>
@@ -155,7 +162,9 @@ const lit={};                                   // node id -> time (ms) until wh
 function addMsg(role,text){const e=$("#empty");if(e)e.remove();const d=el("div","msg "+role,text);const l=$("#log");l.appendChild(d);l.scrollTop=l.scrollHeight}
 function addNote(t){const d=el("div","note",t);const l=$("#log");l.appendChild(d);l.scrollTop=l.scrollHeight}
 const NAMES={idle:"ready",listening:"listening",thinking:"thinking",speaking:"speaking"};
-function setState(s){state=s;$("#label").textContent=NAMES[s]||s;$("#mode").textContent=NAMES[s]||s;$("#status").textContent=online?NAMES[s]||s:"reconnecting…";
+let micOn=true;
+function setMic(on){micOn=on;const b=$("#power");b.textContent=on?"Stop mic":"Start mic";b.setAttribute("aria-pressed",on);b.classList.toggle("off",!on);setState(state)}
+function setState(s){state=s;const t=!micOn&&s!=="speaking"&&s!=="thinking"?"mic off":NAMES[s]||s;$("#label").textContent=t;$("#mode").textContent=t;$("#status").textContent=online?t:"reconnecting…";
  $("#mic").setAttribute("aria-pressed",s==="listening");$("#dot").classList.toggle("off",!online);$("#onl").textContent=online?"Online":"Offline";
  for(const p of ["live","live2"]){$("#"+p).classList.toggle("off",!online);$("#"+p).textContent=online?"LIVE":"OFFLINE"}}
 
@@ -177,6 +186,28 @@ function renderQuick(list){const box=$("#quick");box.textContent="";if(!list.len
  list.forEach(q=>{const on=/^on/i.test(q.status);const b=el("button","btn"+(on?" on":""));b.append(el("span","",q.label),el("em","",q.status||"run"));
   b.onclick=()=>{b.disabled=true;b.lastChild.textContent="working…";post("/api/quick",{plugin:q.plugin,id:q.id})};box.appendChild(b)});
  const r=list.find(q=>q.plugin==="remote_access");if(r)lit.remote=/^on/i.test(r.status)?Infinity:0}
+function renderAdds(list){const box=$("#adds");box.textContent="";list.forEach(a=>{const c=el("div","card"),b=el("div","body"),f=el("form","addf");
+ const items=el("div","quick");(a.items||[]).forEach(it=>{const x=el("button","btn"+(it.on?" on":""));x.type="button";x.append(el("span","",it.label),el("em","",it.sub||""));
+  x.style.flex="1";x.onclick=()=>post("/api/pick",{plugin:a.plugin,id:it.id});
+  const i2=el("button","btn ghost","Details");i2.type="button";i2.setAttribute("aria-label","Details of "+it.label);i2.onclick=()=>showDetail(a.plugin,it.id);
+  const r=el("div","irow");r.append(x,i2);items.appendChild(r)});if(!(a.items||[]).length)items.appendChild(el("span","muted","No projects yet. Add one below."));
+ const i=el("input");i.placeholder=a.placeholder||"";i.maxLength=60;i.setAttribute("aria-label",a.placeholder||a.title);const go=el("button","btn",a.label);go.type="submit";
+ f.onsubmit=e=>{e.preventDefault();const t=i.value.trim();if(!t)return;i.value="";post("/api/add",{plugin:a.plugin,text:t})};
+ f.append(i,go);items.style.marginBottom="10px";const dp=el("div","detail");dp.id="detail-"+a.plugin;dp.hidden=true;b.append(items,dp,f);c.append(el("h2","",a.title),b);box.appendChild(c)});
+ if(openD&&list.some(a=>a.plugin===openD.plugin&&a.items.some(i=>i.id===openD.id)))showDetail(openD.plugin,openD.id,true);else openD=null}
+let openD=null;
+async function showDetail(plugin,id,keep){const dp=$("#detail-"+plugin);if(!dp)return;
+ if(!keep&&openD&&openD.plugin===plugin&&openD.id===id){openD=null;dp.hidden=true;return}
+ let d={};try{d=await (await post("/api/detail",{plugin,id})).json()}catch(e){}
+ if(!d.title){dp.hidden=true;return}
+ openD={plugin,id};dp.textContent="";dp.hidden=false;dp.appendChild(el("h3","",d.title+(d.open?" (open)":"")));
+ (d.rows||[]).forEach(([k,v])=>{const r=el("div","kv");r.appendChild(el("span","k",k));
+  if(/^https:\/\/github\.com\//.test(v)){const l=el("a","",v);l.href=v;l.target="_blank";l.rel="noopener noreferrer";r.appendChild(l)}else r.appendChild(el("span","v",v));dp.appendChild(r)});
+ if(d.text)dp.appendChild(el("pre","",d.text));
+ if(d.notes){dp.appendChild(el("h4","","Notes"));dp.appendChild(el("pre","",d.notes))}
+ const ar=el("button","btn ghost","Archive");ar.type="button";let armed=false;
+ ar.onclick=()=>{if(!armed){armed=true;ar.textContent="Click again to archive";setTimeout(()=>{armed=false;ar.textContent="Archive"},4000);return}openD=null;post("/api/archive",{plugin,id})};
+ dp.appendChild(ar)}
 function renderPlugins(list){const box=$("#plugins");box.textContent="";list.forEach(p=>{const r=el("label","row");const n=el("div","nm");n.append(el("b","",p.name),el("small",p.on?"":"bad",p.on?p.doc:p.status));
  const cb=el("input","sw");cb.type="checkbox";cb.checked=p.on;cb.disabled=p.locked||(!p.on&&!/disabled/.test(p.status));cb.setAttribute("aria-label",p.name);
  cb.onchange=()=>{post("/api/plugin",{name:p.name,on:cb.checked});$("#restart").hidden=false};r.append(n,cb);box.appendChild(r)})}
@@ -196,10 +227,11 @@ function connect(){const es=new EventSource("/events?t="+TOKEN);
  es.onmessage=e=>{const m=JSON.parse(e.data);
   if(m.type==="snapshot"){$("#log").textContent="";if(!m.history.length)$("#log").innerHTML='<div class="empty" id="empty">Say “Hey Hommie…”, press Talk, or type below.</div>';m.history.forEach(h=>addMsg(h.role,h.text));
    feed.length=0;counts={info:0,success:0,warning:0,error:0};$("#feed").textContent="";m.activity.forEach(a=>addEvent(a,false));chips();
-   nodes=m.nodes;layout();renderStats(m.stats);renderSettings(m.settings);renderQuick(m.quick||[]);renderPlugins(m.plugins);$("#dirs").textContent=m.dirs.join("\n");$("#mic").hidden=!m.can_listen;canImages=!!m.can_images;$("#attach").hidden=!canImages;setState(m.state)}
+   nodes=m.nodes;layout();renderStats(m.stats);renderSettings(m.settings);renderQuick(m.quick||[]);renderAdds(m.adds||[]);renderPlugins(m.plugins);$("#dirs").textContent=m.dirs.join("\n");$("#mic").hidden=!m.can_listen;$("#power").hidden=!m.can_mic;micOn=m.mic_on!==false;canImages=!!m.can_images;$("#attach").hidden=!canImages;setMic(micOn);setState(m.state)}
+  else if(m.type==="mic"){setMic(m.on);if(!m.on&&m.reason==="quiet")addNote("Mic switched off after a quiet spell. Press Start mic, or Talk, to listen again.")}
   else if(m.type==="msg")addMsg(m.role,m.text);else if(m.type==="note")addNote(m.text);else if(m.type==="state")setState(m.state);
   else if(m.type==="level"){level=m.v;$("#meter").style.width=Math.min(100,m.v*160)+"%";$("#lvl").textContent=m.v>.02?"hearing you":"idle"}
-  else if(m.type==="settings")renderSettings(m.settings);else if(m.type==="quick")renderQuick(m.quick);else if(m.type==="stats")renderStats(m.stats);
+  else if(m.type==="adds")renderAdds(m.adds);else if(m.type==="settings")renderSettings(m.settings);else if(m.type==="quick")renderQuick(m.quick);else if(m.type==="stats")renderStats(m.stats);
   else if(m.type==="activity")addEvent(m,true);else if(m.type==="pulse")lit[m.node]=Date.now()+2800;
   else if(m.type==="confirm"){confirmId=m.id;$("#confirm").classList.add("on")}else if(m.type==="confirm_done"){confirmId=null;$("#confirm").classList.remove("on")}}}
 let canImages=false,pending=[];
@@ -220,6 +252,7 @@ $("#f").onsubmit=async e=>{e.preventDefault();const t=$("#text").value.trim();
   const r=await post("/api/image",{images:urls,text:t});if(!r.ok){let m="I couldn't take that image.";try{m=(await r.json()).error||m}catch(x){}addNote(m)}return}
  if(t){post("/api/say",{text:t});$("#text").value=""}};
 $("#mic").onclick=()=>post("/api/listen");
+$("#power").onclick=()=>post("/api/mic",{on:!micOn});
 $("#yes").onclick=()=>confirmId&&post("/api/confirm",{id:confirmId,ok:true});$("#no").onclick=()=>confirmId&&post("/api/confirm",{id:confirmId,ok:false});
 const panel=$("#panel");const gear=$("#gear");
 gear.onclick=()=>{panel.classList.toggle("open");gear.setAttribute("aria-expanded",panel.classList.contains("open"))};$("#close").onclick=()=>{panel.classList.remove("open");gear.setAttribute("aria-expanded","false")};

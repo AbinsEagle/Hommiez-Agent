@@ -2,7 +2,7 @@
 """One-off asset builder for the desktop character (run with the venv python; needs Pillow and numpy).
 Takes the flat sticker picture and writes assets/mascot/ for tools/mascot.py:
   base.png            the figure with both hands lifted out (so they can move without leaving a ghost behind)
-  hand_up.png         a strip of the top hand bent to every angle in its range (1 degree apart; see layers.json)
+  hand_up.png         a grid of the top hand: tilted to every angle across, lifted or dropped down the rows (see layers.json)
   hand_low.png        the same for the lower hand
   sparkle1/2.png, dash1/2.png   the four loose bits, each with its own white sticker border
   layers.json         where everything goes (all in the 300 x 293 frame of assets/mascot.png)
@@ -23,10 +23,10 @@ SS = 2                                                  # supersampling for clea
 HANDS = {
     # tilting the top hand up (+) pushes the fist into the head, so it may only tilt a little that way
     "hand_up": dict(pivot=(232, 44), parts=[((232, 44), (172, 26), 20, 8), ((232, 44), (216, 6), 13, 8)], rect=(158, 0, 252, 70),
-                    arm=(1.0, 0.0), ramp=(-4, 14), floor_y=(47, 57), angles=(-16, 8)),
+                    arm=(1.0, 0.0), ramp=(-4, 14), floor_y=(47, 57), angles=(-16, 8, 2), lifts=(-9, 5, 1)),
     # the lower hand: only the fist and finger bend. The thumb shares its outline with the face, so it stays put.
     "hand_low": dict(pivot=(123, 210), parts=[((123, 210), (88, 184), 20, 7)], rect=(72, 150, 150, 236),
-                     arm=(0.8, 0.6), ramp=(-10, 2), floor_y=None, angles=(-3, 18)),
+                     arm=(0.8, 0.6), ramp=(-10, 2), floor_y=None, angles=(-2, 18, 2), lifts=(-9, 5, 1)),
 }
 
 def smooth(t):
@@ -80,15 +80,16 @@ def sample(pm, xs, ys):
         return np.where(ok, pm[np.clip(yy, 0, H - 1), np.clip(xx, 0, W - 1)], 0.0)
     return (at(y0, x0) * (1 - fx) * (1 - fy) + at(y0, x0 + 1) * fx * (1 - fy) + at(y0 + 1, x0) * (1 - fx) * fy + at(y0 + 1, x0 + 1) * fx * fy)
 
-def render(pm, box, weight_fn=None, angle=0.0, pivot=(0, 0)):
-    """Render frame-space box (x0, y0, x1, y1) from the 512 source, twisting by `angle` degrees about `pivot` where weight is 1."""
+def render(pm, box, weight_fn=None, angle=0.0, pivot=(0, 0), lift=0.0):
+    """Render frame-space box (x0, y0, x1, y1) from the 512 source, twisting by `angle` degrees about `pivot` and moving down
+    by `lift` pixels (negative = up), both fading out with the weight."""
     x0, y0, x1, y1 = box
     w, h = (x1 - x0) * SS, (y1 - y0) * SS
     gx, gy = np.meshgrid(x0 + (np.arange(w) + 0.5) / SS, y0 + (np.arange(h) + 0.5) / SS)
-    if weight_fn is not None and angle:
+    if weight_fn is not None and (angle or lift):
         wgt = weight_fn(gx, gy)
         a = -math.radians(angle) * wgt                         # inverse map: where did this pixel come from?
-        dx, dy = gx - pivot[0], gy - pivot[1]
+        dx, dy = gx - pivot[0], gy - lift * wgt - pivot[1]
         sx, sy = pivot[0] + dx * np.cos(a) - dy * np.sin(a), pivot[1] + dx * np.sin(a) + dy * np.cos(a)
     else:
         sx, sy = gx, gy
@@ -132,11 +133,16 @@ def main():
     for name, h in HANDS.items():
         x0, y0, x1, y1 = h["rect"]
         base[y0 + 3:y1 - 3, x0 + 3:x1 - 3, 3] = 0           # lift the hand out of the base; the strip puts it back
-        lo, hi = h["angles"]
-        frames = [render(pm, h["rect"], make_weight(h), a, h["pivot"]) for a in range(lo, hi + 1)]
-        strip = np.concatenate(frames, axis=1)
-        Image.fromarray(strip, "RGBA").save(os.path.join(OUT, name + ".png"))
-        meta[name] = {"rect": list(h["rect"]), "pivot": list(h["pivot"]), "frames": len(frames), "amin": lo, "amax": hi}
+        lo, hi, astep = h["angles"]
+        dlo, dhi, dstep = h["lifts"]
+        angles = list(range(lo, hi + 1, astep))
+        lifts = list(range(dlo, dhi + 1, dstep))
+        wf = make_weight(h)
+        # a grid: one column per angle, one row per lift
+        grid = np.concatenate([np.concatenate([render(pm, h["rect"], wf, a, h["pivot"], d) for a in angles], axis=1) for d in lifts], axis=0)
+        Image.fromarray(grid, "RGBA").save(os.path.join(OUT, name + ".png"))
+        meta[name] = {"rect": list(h["rect"]), "pivot": list(h["pivot"]), "cols": len(angles), "rows": len(lifts),
+                      "amin": lo, "amax": angles[-1], "astep": astep, "dmin": dlo, "dmax": lifts[-1], "dstep": dstep}
     Image.fromarray(base, "RGBA").save(os.path.join(OUT, "base.png"))
 
     loose = [(n, i) for n, i in sizes[1:] if n > 40]
